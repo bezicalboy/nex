@@ -15,9 +15,9 @@ use crate::task::Task;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use prost::Message;
 use reqwest::{Client, ClientBuilder, Proxy, Response};
-use std::sync::OnceLock;
-use std::time::Duration;
 use std::fs;
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 use rand::seq::SliceRandom;
 
 // Privacy-preserving country detection for network optimization.
@@ -28,7 +28,7 @@ static COUNTRY_CODE: OnceLock<String> = OnceLock::new();
 
 #[derive(Debug, Clone)]
 pub struct OrchestratorClient {
-    client: Client,
+    proxies: Arc<Vec<Proxy>>,
     environment: Environment,
 }
 
@@ -46,24 +46,21 @@ impl OrchestratorClient {
             })
             .collect();
 
-        let client = if !proxies.is_empty() {
-            let proxy = proxies.choose(&mut rand::thread_rng()).unwrap();
-            ClientBuilder::new()
-                .proxy(proxy.clone())
-                .timeout(Duration::from_secs(10))
-                .build()
-                .expect("Failed to create HTTP client with proxy")
-        } else {
-            ClientBuilder::new()
-                .timeout(Duration::from_secs(10))
-                .build()
-                .expect("Failed to create HTTP client")
-        };
-
         Self {
-            client,
+            proxies: Arc::new(proxies),
             environment,
         }
+    }
+
+    /// Creates a new reqwest::Client with a randomly selected proxy for each call.
+    fn get_client(&self) -> Result<Client, reqwest::Error> {
+        let mut builder = ClientBuilder::new().timeout(Duration::from_secs(10));
+
+        if let Some(proxy) = self.proxies.choose(&mut rand::thread_rng()) {
+            builder = builder.proxy(proxy.clone());
+        }
+
+        builder.build()
     }
 
     fn build_url(&self, endpoint: &str) -> String {
@@ -94,9 +91,9 @@ impl OrchestratorClient {
         endpoint: &str,
         body: Vec<u8>,
     ) -> Result<T, OrchestratorError> {
+        let client = self.get_client()?;
         let url = self.build_url(endpoint);
-        let response = self
-            .client
+        let response = client
             .get(&url)
             .header("Content-Type", "application/octet-stream")
             .body(body)
@@ -113,9 +110,9 @@ impl OrchestratorClient {
         endpoint: &str,
         body: Vec<u8>,
     ) -> Result<T, OrchestratorError> {
+        let client = self.get_client()?;
         let url = self.build_url(endpoint);
-        let response = self
-            .client
+        let response = client
             .post(&url)
             .header("Content-Type", "application/octet-stream")
             .body(body)
@@ -132,9 +129,9 @@ impl OrchestratorClient {
         endpoint: &str,
         body: Vec<u8>,
     ) -> Result<(), OrchestratorError> {
+        let client = self.get_client()?;
         let url = self.build_url(endpoint);
-        let response = self
-            .client
+        let response = client
             .post(&url)
             .header("Content-Type", "application/octet-stream")
             .body(body)
@@ -196,8 +193,8 @@ impl OrchestratorClient {
     }
 
     async fn get_country_from_cloudflare(&self) -> Result<String, Box<dyn std::error::Error>> {
-        let response = self
-            .client
+        let client = self.get_client().map_err(|e| e.to_string())?;
+        let response = client
             .get("https://cloudflare.com/cdn-cgi/trace")
             .timeout(Duration::from_secs(5))
             .send()
@@ -218,8 +215,8 @@ impl OrchestratorClient {
     }
 
     async fn get_country_from_ipinfo(&self) -> Result<String, Box<dyn std::error::Error>> {
-        let response = self
-            .client
+        let client = self.get_client().map_err(|e| e.to_string())?;
+        let response = client
             .get("https://ipinfo.io/country")
             .timeout(Duration::from_secs(5))
             .send()
