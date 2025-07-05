@@ -14,9 +14,11 @@ use crate::system::{estimate_peak_gflops, get_memory_info};
 use crate::task::Task;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use prost::Message;
-use reqwest::{Client, ClientBuilder, Response};
+use reqwest::{Client, ClientBuilder, Proxy, Response};
 use std::sync::OnceLock;
 use std::time::Duration;
+use std::fs;
+use rand::seq::SliceRandom;
 
 // Privacy-preserving country detection for network optimization.
 // Only stores 2-letter country codes (e.g., "US", "CA", "GB") to help route
@@ -32,11 +34,28 @@ pub struct OrchestratorClient {
 
 impl OrchestratorClient {
     pub fn new(environment: Environment) -> Self {
-        Self {
-            client: ClientBuilder::new()
+        let proxies = fs::read_to_string("clients/cli/target/release/proxy.txt")
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| Proxy::all(line).ok())
+            .collect::<Vec<_>>();
+
+        let client = if !proxies.is_empty() {
+            let proxy = proxies.choose(&mut rand::thread_rng()).unwrap();
+            ClientBuilder::new()
+                .proxy(proxy.clone())
                 .timeout(Duration::from_secs(10))
                 .build()
-                .expect("Failed to create HTTP client"),
+                .expect("Failed to create HTTP client with proxy")
+        } else {
+            ClientBuilder::new()
+                .timeout(Duration::from_secs(10))
+                .build()
+                .expect("Failed to create HTTP client")
+        };
+
+        Self {
+            client,
             environment,
         }
     }
