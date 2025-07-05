@@ -34,11 +34,17 @@ pub struct OrchestratorClient {
 
 impl OrchestratorClient {
     pub fn new(environment: Environment) -> Self {
-        let proxies = fs::read_to_string("clients/cli/target/release/proxy.txt")
+        let proxies: Vec<Proxy> = fs::read_to_string("clients/cli/target/release/proxy.txt")
             .unwrap_or_default()
             .lines()
-            .filter_map(|line| Proxy::all(line).ok())
-            .collect::<Vec<_>>();
+            .filter_map(|line| {
+                if line.starts_with("socks") {
+                    Proxy::all(line).ok()
+                } else {
+                    Proxy::http(line).ok()
+                }
+            })
+            .collect();
 
         let client = if !proxies.is_empty() {
             let proxy = proxies.choose(&mut rand::thread_rng()).unwrap();
